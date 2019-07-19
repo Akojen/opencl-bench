@@ -26,19 +26,20 @@
 #define OPENCL_DEVICE_SELECTION CL_DEVICE_TYPE_GPU
 
 #include "gemm.h"
-#include <polybench.h>
-#include <polybenchUtilFuncts.h>
+#include "polybench.h"
+#include "polybenchUtilFuncts.h"
+#include <emmintrin.h>
 
 //define the error threshold for the results "not matching"
-#define PERCENT_DIFF_ERROR_THRESHOLD 0.05
+#define PERCENT_DIFF_ERROR_THRESHOLD 5.0
 
 #define MAX_SOURCE_SIZE (0x100000)
 
-#if defined(cl_khr_fp64)  // Khronos extension available?
-#pragma OPENCL EXTENSION cl_khr_fp64 : enable
-#elif defined(cl_amd_fp64)  // AMD extension available?
-#pragma OPENCL EXTENSION cl_amd_fp64 : enable
-#endif
+//#if defined(cl_khr_fp64)  // Khronos extension available?
+//#pragma OPENCL EXTENSION cl_khr_fp64 : enable
+//#elif defined(cl_amd_fp64)  // AMD extension available?
+//#pragma OPENCL EXTENSION cl_amd_fp64 : enable
+//#endif
 
 char str_temp[1024];
 
@@ -71,6 +72,7 @@ void compareResults(int ni, int nj, DATA_TYPE POLYBENCH_2D(C,NI,NJ,ni,nj), DATA_
 	{
 		for (j=0; j < nj; j++) 
 		{
+			//printf("%f, %f\n", C[i][j], C_outputFromGpu[i][j]);
 			if (percentDiff(C[i][j], C_outputFromGpu[i][j]) > PERCENT_DIFF_ERROR_THRESHOLD) 
 			{
 				fail++;
@@ -247,23 +249,33 @@ void cl_clean_up()
 	if(errcode != CL_SUCCESS) printf("Error in cleanup\n");
 }
 
-
 void gemm(int ni, int nj, int nk, DATA_TYPE alpha, DATA_TYPE beta, DATA_TYPE POLYBENCH_2D(A,NI,NK,ni,nk), 
 	 DATA_TYPE POLYBENCH_2D(B,NK,NJ,nk,nj), DATA_TYPE POLYBENCH_2D(C,NI,NJ,ni,nj))
 {
 	int i,j,k;
-	
+
 	for (i = 0; i < _PB_NI; i++)
 	{
     		for (j = 0; j < _PB_NJ; j++)
     		{
-			C[i][j] *= beta;
-	
-			for (k = 0; k < _PB_NK; ++k)
-			{
-	  			C[i][j] += alpha * A[i][k] * B[k][j];
-			}
-      		}
+					C[i][j] *= beta;
+					float temp[4];
+					for (k = 0; k < _PB_NK; k+=4)
+					{
+							
+							__m128 alpha_in = _mm_load_ps1(&alpha);
+							__m128 a_in = _mm_load_ps(&A[i][k]);
+							__m128 t_in = _mm_mul_ps(alpha_in, a_in);
+							__m128 b_in = _mm_set_ps(B[k][j], B[k+1][j],B[k+2][j],B[k+3][j]);
+							__m128 t_out = _mm_mul_ps(b_in, t_in);
+							_mm_store_ps(temp, t_out);
+
+							C[i][j] = C[i][j] * temp[0];
+							C[i][j] = C[i][j] * temp[1];
+							C[i][j] = C[i][j] * temp[2];
+							C[i][j] = C[i][j] * temp[3];
+					}
+				}
 	}
 }
 
@@ -295,10 +307,10 @@ int main(int argc, char *argv[])
 	/* Variable declaration/allocation. */
 	DATA_TYPE alpha;
 	DATA_TYPE beta;
-	POLYBENCH_2D_ARRAY_DECL(A,DATA_TYPE,NI,NK,ni,nk);
-	POLYBENCH_2D_ARRAY_DECL(B,DATA_TYPE,NK,NJ,nk,nj);
-	POLYBENCH_2D_ARRAY_DECL(C,DATA_TYPE,NI,NJ,ni,nj);
-	POLYBENCH_2D_ARRAY_DECL(C_outputFromGpu,DATA_TYPE,NI,NJ,ni,nj);
+	alignas(16) POLYBENCH_2D_ARRAY_DECL(A,DATA_TYPE,NI,NK,ni,nk);
+	alignas(16) POLYBENCH_2D_ARRAY_DECL(B,DATA_TYPE,NK,NJ,nk,nj);
+	alignas(16) POLYBENCH_2D_ARRAY_DECL(C,DATA_TYPE,NI,NJ,ni,nj);
+	alignas(16) POLYBENCH_2D_ARRAY_DECL(C_outputFromGpu,DATA_TYPE,NI,NJ,ni,nj);
 
 	init(ni, nj, nk, &alpha, &beta, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(B), POLYBENCH_ARRAY(C));
 
@@ -344,4 +356,4 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-#include <polybench.c>
+#include "polybench.c"
